@@ -36,14 +36,25 @@ public final class Mp4Mux {
   // ---------------------------------------------------------------- reading
   /** Buffered random-access reader. */
   static final class Rd implements Closeable {
-    final RandomAccessFile f; final long len; final byte[] buf=new byte[1<<16]; long bufPos=-1; int bufLen; long pos;
+    final RandomAccessFile f; final long len; final byte[] buf=new byte[1<<18]; long bufPos=-1; int bufLen; long pos;
     Rd(File file) throws IOException { f=new RandomAccessFile(file,"r"); len=f.length(); }
     int u8() throws IOException { if (bufPos<0 || pos<bufPos || pos>=bufPos+bufLen){ if (pos>=len) throw new EOFException("unexpected end of file at "+pos); f.seek(pos); bufPos=pos; bufLen=f.read(buf,0,buf.length); if (bufLen<=0){ bufPos=-1; throw new EOFException("read failed at "+pos); } }
       int v=buf[(int)(pos-bufPos)]&0xff; pos++; return v; }
     long u(int bytes) throws IOException { long v=0; for (int i=0;i<bytes;i++) v=(v<<8)|u8(); return v; }
     int u16() throws IOException { return (int)u(2); } long u32() throws IOException { return u(4); } long u64() throws IOException { return u(8); }
     String four() throws IOException { char[] c=new char[4]; for (int i=0;i<4;i++) c[i]=(char)u8(); return new String(c); }
-    byte[] bytes(int n) throws IOException { byte[] b=new byte[n]; for (int i=0;i<n;i++) b[i]=(byte)u8(); return b; }
+    byte[] bytes(int n) throws IOException {
+      byte[] b=new byte[n]; int done=0;
+      while (done<n){
+        if (bufPos<0 || pos<bufPos || pos>=bufPos+bufLen){
+          if (pos>=len) throw new EOFException("unexpected end of file at "+pos);
+          f.seek(pos); bufPos=pos; bufLen=f.read(buf,0,buf.length); if (bufLen<=0){ bufPos=-1; throw new EOFException("read failed at "+pos); }
+        }
+        int avail=Math.min(n-done, (int)(bufPos+bufLen-pos));
+        System.arraycopy(buf, (int)(pos-bufPos), b, done, avail);
+        pos+=avail; done+=avail;
+      }
+      return b; }
     public void close() throws IOException { f.close(); }
   }
 

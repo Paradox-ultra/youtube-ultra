@@ -1,0 +1,24 @@
+--- a/classes3/gqg.smali
++++ b/classes3/gqg.smali
+@@ -1561,6 +1561,21 @@
+ 
+     check-cast v7, Lbds;
+ 
++    if-eqz v7, :cond_stock_drawer
++
++    invoke-virtual {v7}, Landroid/view/View;->getContext()Landroid/content/Context;
++
++    move-result-object v8
++
++    invoke-static {v8}, Lapp/morphe/extension/youtube/patches/OverrideYouTubeMusicButtonsPatch;->launchMusicApp(Landroid/content/Context;)Z
++
++    move-result v8
++
++    if-eqz v8, :cond_stock_drawer
++
++    return-void
++
++    :cond_stock_drawer
+     invoke-virtual {v7}, Lbds;->u()Z
+ 
+     move-result v7

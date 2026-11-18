@@ -120,6 +120,16 @@ public final class Formats {
   public static Pick pick(StreamInfo i, String spec){
     Pick p=new Pick(); String[] s=spec.split(":"); p.durationUs=Math.max(0,i.getDuration())*1_000_000L;
     if (s[0].equals("a")) { AudioStream a=bestAudio(i); if (a==null) return null; int kb=320;
+      if (s.length>1 && s[1].equals("music")) {
+        AudioStream opus=null;
+        for (AudioStream x: i.getAudioStreams()) if (ok(x) && (x.getFormat()==MediaFormat.WEBMA_OPUS || "opus".equalsIgnoreCase(x.getCodec()))) {
+          if (opus==null || x.getAverageBitrate()>opus.getAverageBitrate()) opus=x;
+        }
+        if (opus!=null) a=opus;
+        p.audioOnly=true; p.audioUrl=a.getContent(); p.audioLen=len(a);
+        p.ext=(a.getFormat()==MediaFormat.WEBMA_OPUS || "opus".equalsIgnoreCase(a.getCodec()))? ".opus": Names.MP3;
+        p.kbps=320; p.label="Music (Opus)"; p.codec="opus"; return p;
+      }
       try { if (s[1].equals("mp3")) kb=Integer.parseInt(s[2]);
         else if (s[1].equals("rank")) kb=Mp3.KBPS[Math.max(0,Math.min(Integer.parseInt(s[2]), Mp3.KBPS.length-1))];
         else if (s[1].equals("itag")) { int it=Integer.parseInt(s[2]); for (AudioStream x: i.getAudioStreams()) if (ok(x) && x.getItag()==it) { kb=kbpsFor(x.getAverageBitrate()); break; } } } catch (Exception e){ kb=320; }

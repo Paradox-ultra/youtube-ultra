@@ -103,6 +103,12 @@ ULTRA_ENTRY = """    <Preference android:icon="@drawable/ytultra_settings_key_ic
         </intent>
     </Preference>
 """
+ULTRA_ENTRY_CAIRO = """    <Preference android:layout="@layout/ytultra_preference_with_icon" android:title="YouTube Ultra" android:key="ytultra_settings_key" app:iconSpaceReserved="true">
+        <intent android:targetPackage="app.paradox.youtube" android:data="revanced_settings_intent" android:targetClass="com.google.android.libraries.social.licenses.LicenseActivity">
+            <extra android:name="ytultra" android:value="1" />
+        </intent>
+    </Preference>
+"""
 ULTRA_COMPONENTS = """        <activity android:exported="false" android:label="Queue &amp; Watch later" android:name="paradox.dl.QueueActivity" android:theme="@android:style/Theme.Material.NoActionBar"/>
         <activity android:configChanges="keyboardHidden|orientation|screenLayout|uiMode|screenSize|smallestScreenSize" android:exported="false" android:label="Offline player" android:name="paradox.dl.OfflinePlayerActivity" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"/>
         <activity android:excludeFromRecents="true" android:exported="true" android:label="Add to queue (YouTube Ultra)" android:name="paradox.dl.QueueAddActivity" android:noHistory="true" android:theme="@android:style/Theme.Translucent.NoTitleBar">
@@ -120,24 +126,28 @@ ULTRA_COMPONENTS = """        <activity android:exported="false" android:label="
             </intent-filter>
         </activity>
         <activity android:excludeFromRecents="true" android:exported="false" android:label="YouTube Ultra" android:name="paradox.dl.UltraActionActivity" android:noHistory="true" android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
+        <activity android:configChanges="keyboardHidden|orientation|screenLayout|uiMode|screenSize|smallestScreenSize" android:exported="false" android:label="Music" android:name="paradox.music.MusicActivity" android:theme="@android:style/Theme.Material.NoActionBar"/>
 """
 
-def ultra_settings_entry(s):
+def ultra_settings_entry(s, cairo=False):
     if "ytultra_settings_key" in s: raise SystemExit("already applied")
     m = re.search(r'<Preference [^>]*android:key="revanced_settings_key"', s)   # the RVX entry (attribute order differs between the three files)
     if not m: raise SystemExit("revanced settings entry not found")
     i = m.start()
     ls = s.rfind("\n", 0, i) + 1
-    return s[:ls] + ULTRA_ENTRY + s[ls:]
+    entry = ULTRA_ENTRY_CAIRO if cairo else ULTRA_ENTRY
+    return s[:ls] + entry + s[ls:]
 
 def ultra(d, here):
     d = pathlib.Path(d)
     edit(d/"AndroidManifest.xml", lambda s: once(s, "    </application>", ULTRA_COMPONENTS + "    </application>"))
     for f in ("settings_fragment.xml", "settings_fragment_cairo.xml", "settings_fragment_legacy.xml"):
-        edit(d/"res/xml"/f, ultra_settings_entry)
+        edit(d/"res/xml"/f, lambda s, cairo=(f == "settings_fragment_cairo.xml"): ultra_settings_entry(s, cairo=cairo))
     import shutil
     shutil.copy(here/"res/xml/ytultra_prefs.xml", d/"res/xml/ytultra_prefs.xml")
     shutil.copy(here/"res/drawable/ytultra_settings_key_icon.xml", d/"res/drawable/ytultra_settings_key_icon.xml")
+    (d/"res/layout").mkdir(parents=True, exist_ok=True)
+    shutil.copy(here/"res/layout/ytultra_preference_with_icon.xml", d/"res/layout/ytultra_preference_with_icon.xml")
     print("v10.13 resources added")
 
 def main():

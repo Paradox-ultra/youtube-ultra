@@ -2,7 +2,7 @@ package paradox.dl;
 import android.app.*; import android.content.*; import android.os.*; import android.content.pm.ServiceInfo; import android.media.MediaScannerConnection;
 import android.provider.MediaStore; import android.net.Uri; import android.util.Log;
 import org.schabi.newpipe.extractor.*; import org.schabi.newpipe.extractor.stream.*;
-import java.io.*; import java.util.*; import java.util.concurrent.*;
+import java.io.*; import java.nio.ByteBuffer; import java.nio.channels.FileChannel; import java.util.*; import java.util.concurrent.*;
 public class DownloadService extends Service {
   static final String CH="paradox_dl", TAG="ParadoxDL"; static final int NID=7301;
   public static final String DIR="YouTube Ultra";
@@ -84,6 +84,7 @@ public class DownloadService extends Service {
         InputStream tin=c.getInputStream(); FileOutputStream to=new FileOutputStream(tf); byte[] bb=new byte[16384]; int nn; while((nn=tin.read(bb))>0) to.write(bb,0,nn); to.close(); tin.close(); it.thumb=tf.getAbsolutePath(); Store.notifyChanged(); } } catch(Throwable t){ Log.w(TAG,"thumb",t); } } }); thumbs.start();
     final Formats.Pick[] pk={Formats.pick(info[0], it.spec)}; if (pk[0]==null) throw new IOException("format not available");
     it.label=pk[0].label;
+    if (it.spec!=null && it.spec.startsWith("a:music")) { workMusic(it, eng, pk[0], tmpDir(it.id), thumbs); return; }
     final List<String> parts=new ArrayList<>(); List<Long> lens=new ArrayList<>();
     if (pk[0].videoUrl!=null){ parts.add("v"); lens.add(pk[0].videoLen);} if (pk[0].audioUrl!=null){ parts.add("a"); lens.add(pk[0].audioLen);} 
     File tmp=tmpDir(it.id); tmp.mkdirs();
@@ -131,11 +132,11 @@ public class DownloadService extends Service {
       try { ParcelFileDescriptor pfd=getContentResolver().openFileDescriptor(u,"rw");
         if (pfd==null) throw new IOException("MediaStore open failed");
         if (audio || pk[0].progressive) copy(audio? mp3: files[0], new ParcelFileDescriptor.AutoCloseOutputStream(pfd));   // closes pfd
-        else if (pk[0].ownMux()) { try { OutputStream o=new BufferedOutputStream(new FileOutputStream(pfd.getFileDescriptor()), 1<<20); ownMux(it, eng, vPath, aPath, o); o.close(); } finally { pfd.close(); } }
+        else if (pk[0].ownMux()) { try { OutputStream o=new BufferedOutputStream(new FileOutputStream(pfd.getFileDescriptor()), 2<<20); ownMux(it, eng, vPath, aPath, o); o.close(); } finally { pfd.close(); } }
         else { boolean okMux=false; Exception first=null; try { Mux.mp4(vPath, aPath, pfd.getFileDescriptor(), null); okMux=true; } catch (Exception e){ first=e; } finally { pfd.close(); }
           if (!okMux) { Log.w(TAG, "MediaMuxer failed, using our own MP4 writer", first);   // v10.11: same H.264 + AAC through Mp4Mux
             ParcelFileDescriptor p2=getContentResolver().openFileDescriptor(u,"rwt"); if (p2==null) throw first;
-            try { OutputStream o=new BufferedOutputStream(new FileOutputStream(p2.getFileDescriptor()), 1<<20); ownMux(it, eng, vPath, aPath, o); o.close(); } catch (Exception e2){ Log.w(TAG,"own mux fallback failed",e2); throw first; } finally { p2.close(); } } }
+            try { OutputStream o=new BufferedOutputStream(new FileOutputStream(p2.getFileDescriptor()), 2<<20); ownMux(it, eng, vPath, aPath, o); o.close(); } catch (Exception e2){ Log.w(TAG,"own mux fallback failed",e2); throw first; } finally { p2.close(); } } }
         ContentValues done=new ContentValues(); done.put(MediaStore.MediaColumns.IS_PENDING, 0); getContentResolver().update(u, done, null, null);
       } catch (Exception e) { getContentResolver().delete(u,null,null); throw e; }
       it.path=u.toString();
@@ -144,9 +145,9 @@ public class DownloadService extends Service {
       File out=new File(dir, name); int n=1; while (out.exists()) out=new File(dir, Names.numbered(name, n++));
       try {
         if (audio) copy(mp3, new FileOutputStream(out)); else if (pk[0].progressive) copy(files[0], new FileOutputStream(out));
-        else if (pk[0].ownMux()) { OutputStream o=new BufferedOutputStream(new FileOutputStream(out), 1<<20); try { ownMux(it, eng, vPath, aPath, o); } finally { o.close(); } }
+        else if (pk[0].ownMux()) { OutputStream o=new BufferedOutputStream(new FileOutputStream(out), 2<<20); try { ownMux(it, eng, vPath, aPath, o); } finally { o.close(); } }
         else { try { Mux.mp4(vPath, aPath, null, out.getAbsolutePath()); }
-          catch (Exception e){ Log.w(TAG, "MediaMuxer failed, using our own MP4 writer", e); OutputStream o=new BufferedOutputStream(new FileOutputStream(out), 1<<20); try { ownMux(it, eng, vPath, aPath, o); } catch (Exception e2){ throw e; } finally { o.close(); } } }
+          catch (Exception e){ Log.w(TAG, "MediaMuxer failed, using our own MP4 writer", e); OutputStream o=new BufferedOutputStream(new FileOutputStream(out), 2<<20); try { ownMux(it, eng, vPath, aPath, o); } catch (Exception e2){ throw e; } finally { o.close(); } } }
       } catch (Exception e){ out.delete(); throw e; }
       it.path=out.getAbsolutePath(); MediaScannerConnection.scanFile(this, new String[]{it.path}, new String[]{mime}, null);
     }
@@ -159,6 +160,98 @@ public class DownloadService extends Service {
       b.setSmallIcon(android.R.drawable.stat_sys_download_done).setContentTitle("Downloaded").setContentText(it.title).setAutoCancel(true)
        .setContentIntent(PendingIntent.getActivity(this, it.id.hashCode(), play, PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT));
       nm.notify(it.id.hashCode(), b.build()); } catch(Exception e){}
+  }
+  void workMusic(final Store.Item it, final Engine eng, Formats.Pick pk, File tmp, Thread thumbs) throws Exception {
+    if (eng.cancelled) throw new IOException("Cancelled");
+    tmp.mkdirs(); it.status="downloading"; Store.notifyChanged();
+    File raw=new File(tmp, "audio.raw");
+    long totalLen = pk.audioLen;
+    if (totalLen <= 0) {
+      totalLen = paradox.music.download.RangeDownloader.probeContentLength(pk.audioUrl, Account.headers());
+    }
+    if (totalLen <= 0) {
+      throw new IOException("Cannot determine audio stream length for " + it.title);
+    }
+    final long discoveredLen = totalLen;
+    boolean dlOk=paradox.music.download.RangeDownloader.download(pk.audioUrl, raw, Account.headers(), discoveredLen, new paradox.music.download.RangeDownloader.ProgressListener(){
+      public void onProgress(long done, long total){
+        it.done=done; it.total=discoveredLen; it.progress= discoveredLen>0? (int)(done*100/discoveredLen): 0; Store.notifyChanged();
+        try { ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(NID, note(it.title+" · "+it.progress+"%", it.progress)); } catch (Exception e){}
+      }
+    }, new paradox.music.download.RangeDownloader.CancelCheck(){
+      public boolean isCancelled(){ return eng.cancelled; }
+    });
+    if (!dlOk || eng.cancelled) {
+      try { raw.delete(); tmp.delete(); } catch (Throwable ignore) {}
+      if (eng.cancelled) throw new IOException("Cancelled");
+      throw new IOException("Range download failed");
+    }
+    it.status="merging"; it.progress=100; Store.notifyChanged();
+    if (eng.cancelled) {
+      try { raw.delete(); tmp.delete(); } catch (Throwable ignore) {}
+      throw new IOException("Cancelled");
+    }
+    File finalAudio; String ext; String mime;
+    if ("opus".equalsIgnoreCase(pk.codec) || (pk.ext!=null && pk.ext.endsWith("opus"))) {
+      File opusFile=new File(tmp, "track.opus");
+      boolean remuxOk=paradox.music.download.WebmOpusRemuxer.remux(raw, opusFile);
+      if (!remuxOk || !opusFile.exists() || opusFile.length()<=0) {
+        try { raw.delete(); opusFile.delete(); tmp.delete(); } catch (Throwable ignore) {}
+        throw new IOException("Lossless WebM to Ogg Opus remuxing failed for " + it.title);
+      }
+      if (eng.cancelled) {
+        try { raw.delete(); opusFile.delete(); tmp.delete(); } catch (Throwable ignore) {}
+        throw new IOException("Cancelled");
+      }
+      finalAudio=opusFile; ext=".opus"; mime="audio/ogg";
+    } else if ("m4a".equalsIgnoreCase(pk.ext) || "aac".equalsIgnoreCase(pk.codec)) {
+      finalAudio=raw; ext=".m4a"; mime="audio/mp4";
+    } else {
+      finalAudio=raw;
+      ext= (pk.ext!=null && !pk.ext.isEmpty())? (pk.ext.startsWith(".")? pk.ext: "."+pk.ext): ".webm";
+      mime= ext.equals(".webm")? "audio/webm": Names.mime(ext);
+    }
+    if (eng.cancelled) {
+      try { raw.delete(); if (finalAudio!=raw) finalAudio.delete(); tmp.delete(); } catch (Throwable ignore) {}
+      throw new IOException("Cancelled");
+    }
+    String name=Names.file(it.title, ext);
+    if (Build.VERSION.SDK_INT>=29) {
+      Uri coll=MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+      ContentValues cv=new ContentValues(); cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name); cv.put(MediaStore.MediaColumns.MIME_TYPE, mime);
+      cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MUSIC+"/"+DIR); cv.put(MediaStore.MediaColumns.IS_PENDING, 1);
+      cv.put(MediaStore.MediaColumns.TITLE, it.title);
+      Uri u=getContentResolver().insert(coll, cv); if (u==null) throw new IOException("MediaStore insert failed");
+      try {
+        if (eng.cancelled) throw new IOException("Cancelled");
+        ParcelFileDescriptor pfd=getContentResolver().openFileDescriptor(u, "rw");
+        if (pfd==null) throw new IOException("MediaStore open failed");
+        copy(finalAudio, new ParcelFileDescriptor.AutoCloseOutputStream(pfd));
+        if (eng.cancelled) throw new IOException("Cancelled");
+        ContentValues done=new ContentValues(); done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+        getContentResolver().update(u, done, null, null);
+      } catch (Exception e){ getContentResolver().delete(u, null, null); throw e; }
+      it.path=u.toString();
+    } else {
+      File dir=new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), DIR); dir.mkdirs();
+      File out=new File(dir, name); int n=1; while (out.exists()) out=new File(dir, Names.numbered(name, n++));
+      try {
+        if (eng.cancelled) throw new IOException("Cancelled");
+        copy(finalAudio, new FileOutputStream(out));
+        if (eng.cancelled) throw new IOException("Cancelled");
+      } catch (Exception e){ out.delete(); throw e; }
+      it.path=out.getAbsolutePath(); MediaScannerConnection.scanFile(this, new String[]{it.path}, new String[]{mime}, null);
+    }
+    try { raw.delete(); if (finalAudio!=raw) finalAudio.delete(); tmp.delete(); } catch (Throwable ignore){}
+    it.audio=true; it.status="done"; Store.save(this);
+    try {
+      NotificationManager nm=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+      Intent play=new Intent(this, OpenActivity.class).putExtra("path", it.path).putExtra("title", it.title).putExtra("audio", true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_NO_ANIMATION);
+      Notification.Builder b= Build.VERSION.SDK_INT>=26? new Notification.Builder(this, CH): new Notification.Builder(this);
+      b.setSmallIcon(android.R.drawable.stat_sys_download_done).setContentTitle("Downloaded Music").setContentText(it.title).setAutoCancel(true)
+       .setContentIntent(PendingIntent.getActivity(this, it.id.hashCode(), play, PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT));
+      nm.notify(it.id.hashCode(), b.build());
+    } catch (Exception ignore){}
   }
   /** v10.11: VP9 / AV1 (+ AAC) into <title>.mp4 with our own muxer, with a percentage while it copies. */
   void ownMux(final Store.Item it, final Engine eng, String vPath, String aPath, OutputStream o) throws IOException {
@@ -181,5 +274,43 @@ public class DownloadService extends Service {
     if (free<need) throw new Plain("Not enough free space: this "+(pk.audioOnly? "audio": pk.label)+" download needs about "+Ui.size(need)+" free, and the phone has "+Ui.size(free)+". Free some space or pick a lower quality.");
   }
   static final class Plain extends IOException { Plain(String m){ super(m); } }
-  static void copy(File f, OutputStream o) throws IOException { FileInputStream in=new FileInputStream(f); try { byte[] b=new byte[1<<20]; int n; while((n=in.read(b))>0) o.write(b,0,n); } finally { in.close(); o.close(); } }
+  static void copy(File f, OutputStream o) throws IOException {
+    try {
+      long transferred=0;
+      if (o instanceof FileOutputStream) {
+        FileChannel outCh=((FileOutputStream)o).getChannel();
+        try {
+          FileInputStream in=new FileInputStream(f);
+          try {
+            FileChannel inCh=in.getChannel();
+            long size=inCh.size();
+            while (transferred<size){
+              long t=inCh.transferTo(transferred, size-transferred, outCh);
+              if (t<=0) break;
+              transferred+=t;
+            }
+            if (transferred>=size){ o.flush(); return; }
+          } finally { in.close(); }
+        } catch (Exception e){ Log.w(TAG, "transferTo failed at "+transferred, e); }
+
+        if (transferred>0){
+          outCh.position(transferred);
+          FileInputStream in=new FileInputStream(f);
+          try {
+            in.getChannel().position(transferred);
+            byte[] b=new byte[2<<20]; int n;
+            while ((n=in.read(b))>0) o.write(b,0,n);
+            o.flush();
+            return;
+          } finally { in.close(); }
+        }
+      }
+      FileInputStream in=new FileInputStream(f);
+      try {
+        byte[] b=new byte[2<<20]; int n;
+        while ((n=in.read(b))>0) o.write(b,0,n);
+        o.flush();
+      } finally { in.close(); }
+    } finally { o.close(); }
+  }
 }

@@ -1,6 +1,8 @@
 # build output and downloaded tools
 build/
 .deps/
+inputs/
+music-work/
 *.apk
 *.apks
 *.aab
@@ -11,12 +13,17 @@ build/
 # signing material - never commit
 *.jks
 *.keystore
+*.pass
 *.p12
 *.pem
 *.der
 sign.env
 keystore.properties
 local.properties
+
+# Logs and screenshots
+*.log
+*.png
 
 # IDE / OS
 .gradle/

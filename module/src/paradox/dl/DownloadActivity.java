@@ -6,6 +6,26 @@ import java.util.*; import java.util.regex.*;
 public class DownloadActivity extends Activity {
   Ui.Pal P; FrameLayout root; Ui.Sheet sheet; String url; volatile StreamInfo info; volatile List<String[]> vids; volatile String err; volatile boolean plainErr; String type; boolean playlist, remember; TextView subtitle;
   final Handler h=new Handler(Looper.getMainLooper()); Runnable waiting;
+  public static void start(Context c, String videoIdOrUrl){
+    if (c==null || videoIdOrUrl==null) return;
+    String u= videoIdOrUrl.startsWith("http")? videoIdOrUrl: ("https://www.youtube.com/watch?v="+videoIdOrUrl);
+    Intent i=new Intent(c, DownloadActivity.class);
+    i.putExtra("url", u);
+    if (!(c instanceof Activity)) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    c.startActivity(i);
+  }
+  public static void startMusic(Context c, String videoIdOrUrl, String title, String artist, String thumb){
+    if (c==null || videoIdOrUrl==null) return;
+    String u= videoIdOrUrl.startsWith("http")? videoIdOrUrl: ("https://www.youtube.com/watch?v="+videoIdOrUrl);
+    Intent i=new Intent(c, DownloadActivity.class);
+    i.putExtra("url", u);
+    i.putExtra("music", true);
+    if (title!=null) i.putExtra("music_title", title);
+    if (artist!=null) i.putExtra("music_artist", artist);
+    if (thumb!=null) i.putExtra("music_thumb", thumb);
+    if (!(c instanceof Activity)) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    c.startActivity(i);
+  }
   static String findUrl(String s){ if (s==null) return null; Matcher m=Pattern.compile("https?://\\S+").matcher(s); return m.find()? m.group(): null; }
   int dp(float v){ return Ui.dp(this,v); }
   @Override protected void onCreate(Bundle b){ super.onCreate(b); P=Ui.pal(this); overridePendingTransition(0,0);
@@ -16,7 +36,7 @@ public class DownloadActivity extends Activity {
     root=new FrameLayout(this); setContentView(root); Ui.edgeToEdge(this, false, !P.dark);
     sheet=new Ui.Sheet(this, P, root, () -> { finish(); overridePendingTransition(0,0); });
     if (Build.VERSION.SDK_INT>=33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=0) requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},1);
-    resolve(); typeSheet(); sheet.show(); }
+    resolve(); if (in.getBooleanExtra("music", false)) musicSheet(); else typeSheet(); sheet.show(); }
   @Override public void onBackPressed(){ if (sheet!=null && sheet.isOpen()) sheet.dismiss(null); else super.onBackPressed(); }
   void resolve(){ new Thread(() -> { try { Net.init();
       if (playlist){ PlaylistInfo pi=PlaylistInfo.getInfo(ServiceList.YouTube, url); List<String[]> v=new ArrayList<>(); for (StreamInfoItem s: pi.getRelatedItems()) v.add(new String[]{s.getUrl(), s.getName()});
@@ -34,6 +54,11 @@ public class DownloadActivity extends Activity {
     LinearLayout col=new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL); col.setPadding(dp(16),0,dp(8),0); col.addView(Ui.text(this,label,16,P.text,false));
     if (sub!=null){ TextView s=Ui.text(this,sub,14,P.sub,false); s.setPadding(0,dp(2),0,0); col.addView(s); } r.addView(col,new LinearLayout.LayoutParams(0,-2,1f));
     r.addView(Ui.icon(this,Ui.I_CHEVRON,P.sub,20)); Ui.enter(r,idx); return r; }
+  void musicSheet(){ subtitle=sheet.header("Download Music", what()==null? " ": what());
+    View o=iconRow(Ui.I_AUDIO,"Opus Audio (Lossless)","Bit-exact Opus · LastWave Engine, saved to Music",0); o.setOnClickListener(x -> go("a:music:opus"));
+    View m=iconRow(Ui.I_AUDIO,"MP3 Audio (High Compatibility)","320 kbps MP3, saved to Music",1); m.setOnClickListener(x -> go("a:rank:0"));
+    sheet.body.addView(o); sheet.body.addView(m);
+    if (!playlist) { View q=iconRow(Ui.I_VIDEO,"Add to queue","Play it later in the YouTube Ultra queue",2); q.setOnClickListener(x -> saveTo(QueueStore.QUEUE)); sheet.body.addView(q); } }
   void typeSheet(){ subtitle=sheet.header("Download", what()==null? " ": what());
     View v=iconRow(Ui.I_VIDEO,"Video","MP4 with sound, saved to Gallery",0); v.setOnClickListener(x -> chooseType("video"));
     View a=iconRow(Ui.I_AUDIO,"Audio","MP3, saved to Music",1); a.setOnClickListener(x -> chooseType("audio"));

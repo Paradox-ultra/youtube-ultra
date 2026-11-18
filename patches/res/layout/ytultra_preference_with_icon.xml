@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="54.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <view android:layout_gravity="end|center" android:id="@id/revanced_custom_icon" android:background="@drawable/revanced_circle_mask" android:layout_width="48.0dp" android:layout_height="48.0dp" android:src="@drawable/ytultra_settings_key_icon" android:scaleType="fitCenter" android:contentDescription="@null" android:layout_marginHorizontal="6.0dp" android:clipToOutline="true" class="app.morphe.extension.youtube.patches.general.FixPreferenceIconPatch$RvxSettingsIconView" />
+    <TextView android:textSize="@dimen/medium_font_size" android:textColor="?ytTextPrimary" android:gravity="start|center_vertical" android:layout_gravity="center_vertical" android:id="@android:id/title" android:layout_width="match_parent" android:layout_height="wrap_content" android:textAlignment="viewStart" />
+</LinearLayout>
