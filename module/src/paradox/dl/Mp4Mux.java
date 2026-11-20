@@ -286,17 +286,98 @@ public final class Mp4Mux {
 
   static final class Chunk { final int track, first, count; Chunk(int t, int f, int c){ track=t; first=f; count=c; } }
 
+  /**
+   * Bounded per-track read-ahead. Only indexed sample bytes are copied to the
+   * MP4; bytes between WebM blocks may be read ahead but are never emitted.
+   */
+  static final class SampleReader implements Closeable {
+    static final int WINDOW_SIZE = 256 * 1024;
+    final RandomAccessFile file;
+    final long sourceLength;
+    final byte[] window = new byte[WINDOW_SIZE];
+    long windowStart = -1;
+    int windowLength;
+    // Successful Java-level RandomAccessFile.read() calls, not physical I/O.
+    long sourceReadCalls;
+
+    SampleReader(File source) throws IOException {
+      file = new RandomAccessFile(source, "r");
+      try { sourceLength = file.length(); }
+      catch (IOException e) { try { file.close(); } catch (IOException ignored) {} throw e; }
+    }
+
+    void copy(long offset, long length, OutputStream out, byte[] scratch,
+        Progress progress, boolean video) throws IOException {
+      if (length < 0) throw new Failed("negative sample size");
+      long end = offset + length;
+      if (offset < 0 || end < offset || end > sourceLength)
+        throw truncated(video);
+      if (length == 0) return;
+      checkCancelled(progress);
+
+      if (length <= window.length) {
+        if (windowStart < 0 || offset < windowStart ||
+            end > windowStart + windowLength) {
+          windowStart = offset;
+          windowLength = 0;
+          int wanted = (int)Math.min((long)window.length, sourceLength - offset);
+          file.seek(offset);
+          while (windowLength < wanted) {
+            checkCancelled(progress);
+            int n = file.read(window, windowLength, wanted - windowLength);
+            if (n <= 0) break;
+            sourceReadCalls++;
+            windowLength += n;
+          }
+        }
+        if (end > windowStart + windowLength) throw truncated(video);
+        out.write(window, (int)(offset - windowStart), (int)length);
+        return;
+      }
+
+      if (scratch == null || scratch.length == 0)
+        throw new Failed("empty sample copy buffer");
+      file.seek(offset);
+      long left = length;
+      while (left > 0) {
+        checkCancelled(progress);
+        int n = file.read(scratch, 0, (int)Math.min((long)scratch.length, left));
+        if (n <= 0) throw truncated(video);
+        sourceReadCalls++;
+        out.write(scratch, 0, n);
+        left -= n;
+      }
+      windowStart = -1;
+      windowLength = 0;
+    }
+
+    public void close() throws IOException { file.close(); }
+  }
+
+  static Failed truncated(boolean video) {
+    return new Failed("the downloaded "+(video?"video":"audio")+
+        " file is shorter than its index (download incomplete?)");
+  }
+
+  static void checkCancelled(Progress p) throws InterruptedIOException {
+    if (p != null && p.cancelled()) throw new InterruptedIOException("cancelled");
+  }
+
   /** Result facts, for logs and tests. */
   public static final class Result { public long bytes; public double videoSeconds, audioSeconds; public String videoCodec="", audioCodec=""; public int width, height, bitDepth; public boolean hdr; }
 
   /** Mux video (+ optional audio) into out. Closes nothing; the caller owns out. */
   public static Result mux(String videoPath, String audioPath, OutputStream out, Progress p) throws IOException {
-    Track v= videoPath==null? null: read(new File(videoPath), true); Track a= audioPath==null? null: read(new File(audioPath), false);
+    checkCancelled(p);
+    Track v= videoPath==null? null: read(new File(videoPath), true);
+    checkCancelled(p);
+    Track a= audioPath==null? null: read(new File(audioPath), false);
     List<Track> ts=new ArrayList<>(); if (v!=null) ts.add(v); if (a!=null) ts.add(a); if (ts.isEmpty()) throw new Failed("nothing to save");
     if (a!=null && !a.codec.equals("mp4a")) throw new Failed("only AAC audio goes into this MP4 (got "+a.codec+")");
     return write(ts.toArray(new Track[0]), out, p); }
 
   public static Result write(Track[] ts, OutputStream out, Progress p) throws IOException {
+    checkCancelled(p);
     for (Track t: ts) if (t.entry==null) throw new Failed("missing codec header for "+t.codec);
     // interleave: ~1 s chunks, earliest first
     List<Chunk> chunks=new ArrayList<>(); int[] next=new int[ts.length];
@@ -316,15 +397,14 @@ public final class Mp4Mux {
     long total=dataStart+payload, done=0;
     out.write(ftyp); out.write(moov);
     B h=new B(); if (mdatHdr==16){ h.u32(1); h.four("mdat"); h.u64(16+payload); } else { h.u32(8+payload); h.four("mdat"); } out.write(h.toArray()); done=dataStart;
-    RandomAccessFile[] src=new RandomAccessFile[ts.length]; byte[] buf=new byte[1<<20];
-    try { for (int k=0;k<ts.length;k++) src[k]=new RandomAccessFile(ts[k].file,"r");
+    SampleReader[] src=new SampleReader[ts.length]; byte[] buf=new byte[1<<20];
+    try { for (int k=0;k<ts.length;k++){ checkCancelled(p); src[k]=new SampleReader(ts[k].file); }
       long lastReport=0;
-      for (Chunk c: chunks){ Track t=ts[c.track]; RandomAccessFile f=src[c.track]; int i=c.first, end=c.first+c.count;
-        while (i<end){ long o=t.off[i]; long len=t.size[i]; int j=i+1; while (j<end && t.off[j]==o+len && len<64L<<20){ len+=t.size[j]; j++; }
-          f.seek(o); long left=len; while (left>0){ int r=f.read(buf,0,(int)Math.min(buf.length,left)); if (r<0) throw new Failed("the downloaded "+(t.video?"video":"audio")+" file is shorter than its index (download incomplete?)"); out.write(buf,0,r); left-=r; done+=r; }
-          i=j; }
-        if (p!=null){ if (p.cancelled()) throw new InterruptedIOException("cancelled"); if (done-lastReport>(4<<20)){ p.at(done,total); lastReport=done; } } }
-    } finally { for (RandomAccessFile f: src) if (f!=null) try { f.close(); } catch (IOException e){} }
+      for (Chunk c: chunks){ Track t=ts[c.track]; SampleReader f=src[c.track]; int i=c.first, end=c.first+c.count;
+        while (i<end){ checkCancelled(p); long o=t.off[i]; long len=t.size[i]; int j=i+1; while (j<end && t.off[j]==o+len && len<64L<<20){ len+=t.size[j]; j++; }
+          f.copy(o, len, out, buf, p, t.video); done+=len; i=j; }
+        if (p!=null){ checkCancelled(p); if (done-lastReport>(4<<20)){ p.at(done,total); lastReport=done; } } }
+    } finally { for (SampleReader f: src) if (f!=null) try { f.close(); } catch (IOException e){} }
     out.flush(); if (p!=null) p.at(total,total);
     Result res=new Result(); res.bytes=total;
     for (Track t: ts){ if (t.video){ res.videoSeconds=t.seconds(); res.videoCodec=t.codec; res.width=t.width; res.height=t.height; res.bitDepth=t.bitDepth; res.hdr=t.hdr; } else { res.audioSeconds=t.seconds(); res.audioCodec=t.codec; } }
