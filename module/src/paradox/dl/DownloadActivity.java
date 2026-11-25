@@ -88,7 +88,10 @@ public class DownloadActivity extends Activity {
     if (type.equals("audio")) spec="a:rank:"+rem.replace("rank:","");
     else { int want=Integer.parseInt(rem); spec="v:"+want+":mp4"; if (!playlist){ List<String[]> vc=Formats.videoChoices(info); String best=null; for (String[] c: vc){ int hh=Integer.parseInt(c[0].split(":")[1]); if (hh<=want){ best=c[0]; break; } } if (best==null && !vc.isEmpty()) best=vc.get(vc.size()-1)[0]; if (best!=null) spec=best; } }
     go(spec); }); }
+  boolean started;
   void go(String spec){
+    if (started) return; started=true;   // a double tap (or a tap during the closing animation) used to queue the same download twice
+    if (playlist && vids.isEmpty()){ err="this playlist has no videos that can be downloaded"; plainErr=false; started=false; fail(); return; }
     if (playlist){ for (String[] v: vids){ Store.Item it=Store.add(this, v[0], spec, v[1]); DownloadService.start(this, it.id);} Toast.makeText(this,"Downloading "+vids.size()+" videos",Toast.LENGTH_SHORT).show(); }
     else { Store.Item it=Store.add(this, url, spec, info.getName()); DownloadService.start(this, it.id); Toast.makeText(this,"Downloading…",Toast.LENGTH_SHORT).show(); }
     Store.notifyChanged(); sheet.dismiss(null); }

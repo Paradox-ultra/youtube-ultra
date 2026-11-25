@@ -12,7 +12,14 @@ public final class Engine {
   static final int MAGIC=0x50444c32; static final int HDR=20; // magic, length(8), chunk(4), count(4)
   static { try { if (System.getProperty("http.maxConnections")==null) System.setProperty("http.maxConnections","32"); System.setProperty("http.keepAlive","true"); } catch (Throwable ignore) {} }
   public final AtomicLong done=new AtomicLong(); public volatile long total, resumed; public volatile boolean cancelled; public volatile String error;
+  /** clen= in a googlevideo link is the stream's full size, or -1. */
+  static long clen(String url){ java.util.regex.Matcher m=java.util.regex.Pattern.compile("[?&]clen=(\\d+)").matcher(url); return m.find()? Long.parseLong(m.group(1)): -1; }
   static long probeLength(String url) throws IOException {
+    // googlevideo answers "&range=0-0" with just that byte (Content-Length 1, no Content-Range), which used to make the
+    // whole download 1 byte long; use the link's clen, else ask for the headers of the whole stream (HEAD, no range).
+    if (google(url)) { long cl=clen(url); if (cl>0) return cl;
+      HttpURLConnection h=(HttpURLConnection)new URL(url).openConnection(); try { h.setRequestMethod("HEAD"); h.setConnectTimeout(15000); h.setReadTimeout(20000); h.setRequestProperty("User-Agent", Net.ua(url)); h.setRequestProperty("Accept-Encoding","identity");
+        int code=h.getResponseCode(); if (code>=400) throw new IOException("HTTP "+code); String l=h.getHeaderField("Content-Length"); return l==null? -1: Long.parseLong(l); } finally { h.disconnect(); } }
     HttpURLConnection c=open(url, 0, 0); try { int code=c.getResponseCode(); if (code>=400) throw new IOException("HTTP "+code);
       String cr=c.getHeaderField("Content-Range"); if (cr!=null && cr.contains("/")) { String t=cr.substring(cr.lastIndexOf('/')+1).trim(); if (!t.equals("*")) return Long.parseLong(t); }
       String cl=c.getHeaderField("Content-Length"); return cl==null? -1: Long.parseLong(cl);
@@ -59,6 +66,8 @@ public final class Engine {
           HttpURLConnection c=null; boolean ok=false; try { c=open(u, pos, job[2]); int code=c.getResponseCode();
             if (code==403 || code==410) { synchronized(refreshLock){ if (ver[part]==v) { urls[part]=src.refresh(part); ver[part]++; } } throw new IOException("HTTP "+code+" (refreshed)"); }
             if (code>=400) throw new IOException("HTTP "+code);
+            // a non-googlevideo server that ignores Range sends the file from byte 0 (200): writing that at pos would corrupt the part
+            if (!google(u) && code!=206 && pos>0) throw new IOException("server ignored the byte range (HTTP "+code+")");
             InputStream in=c.getInputStream(); int r;
             while (pos<=job[2] && (r=in.read(buf))>0) { int take=(int)Math.min(r, job[2]-pos+1); ByteBuffer bb=ByteBuffer.wrap(buf,0,take); long p=pos; while (bb.hasRemaining()) p+=ch[part].write(bb, p); pos+=take; done.addAndGet(take); if (cancelled) break; }
             if (pos>job[2]) { in.close(); ok=true; } // whole range read: the connection goes back to the pool for the next chunk

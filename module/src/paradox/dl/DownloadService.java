@@ -38,8 +38,11 @@ public class DownloadService extends Service {
   public void onTimeout(int startId, int fgsType){ timedOut=true; for (Engine e: running.values()) e.cancelled=true; h.postDelayed(new Runnable(){ public void run(){ maybeStop(); }}, 3000); }
   @Override public int onStartCommand(Intent in, int f, int sid){
     lastStartId=sid;
-    if (in!=null && in.getStringExtra("cancel")!=null){ Engine e=running.get(in.getStringExtra("cancel")); if (e!=null) e.cancelled=true; else maybeStop(); return START_NOT_STICKY; }   // v10.12: a cancel is a plain startService, no foreground promotion / "Preparing…" flash
-    boolean busy; synchronized(this){ busy= active>0; } if (busy) fg(curText, curP); else fg("Preparing…", -1);   // v10.12: a second Download no longer resets a running progress notification to "Preparing…"
+    if (in!=null && in.getStringExtra("cancel")!=null){ String cid=in.getStringExtra("cancel"); Engine e=running.get(cid); if (e!=null) e.cancelled=true;
+      else { if (Store.get(this,cid)==null) cleanup(cid); maybeStop(); }   // a paused/failed item that was removed: drop its partial files (could be GBs in the cache)
+      return START_NOT_STICKY; }   // v10.12: a cancel is a plain startService, no foreground promotion / "Preparing…" flash
+    boolean busy; synchronized(this){ busy= active>0; } if (!busy) timedOut=false;   // a new run after Android's 6 h stop is not "timed out" too
+    if (busy) fg(curText, curP); else fg("Preparing…", -1);   // v10.12: a second Download no longer resets a running progress notification to "Preparing…"
     final String id= in==null? null: in.getStringExtra("id"); if (id==null){ maybeStop(); return START_NOT_STICKY; }
     final Store.Item it=Store.get(this,id); if (it==null || running.containsKey(id)) { maybeStop(); return START_NOT_STICKY; }
     final Engine eng=new Engine(); running.put(id, eng); synchronized(this){ active++; } lock(true); it.status="queued"; it.error=""; Store.notifyChanged();
@@ -77,6 +80,7 @@ public class DownloadService extends Service {
       ByteArrayOutputStream o=new ByteArrayOutputStream(); bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, o); bm.recycle(); return o.toByteArray();
     } catch (Throwable t){ Log.w(TAG,"cover",t); return null; } }
   void work(final Store.Item it, final Engine eng) throws Exception {
+    if (eng.cancelled) throw new InterruptedException("cancelled");   // paused / removed while it waited for a free slot: don't resolve it at all
     Net.init(); it.status="resolving"; Store.notifyChanged();
     final StreamInfo[] info={Resolve.info(it.url)}; it.title=info[0].getName(); it.channel=info[0].getUploaderName();
     final StreamInfo ti=info[0]; final Thread thumbs=new Thread(new Runnable(){ public void run(){ try { java.util.List<org.schabi.newpipe.extractor.Image> th=ti.getThumbnails(); String tu=null; int best=0; for (org.schabi.newpipe.extractor.Image im: th){ int w=im.getWidth(); if (tu==null || (w>best && w<=720)) { tu=im.getUrl(); best=w; } }

@@ -20,4 +20,5 @@ java -Dfile.encoding=UTF-8 -cp "$OUT:$CP:$AJ" paradox.dl.RoutesTest
 java -Dfile.encoding=UTF-8 -cp "$OUT:$CP:$AJ" paradox.dl.HighResTest
 java -Dfile.encoding=UTF-8 -cp "$OUT:$CP:$AJ" paradox.dl.V1012Test
 java -Dfile.encoding=UTF-8 -cp "$OUT:$CP:$AJ" paradox.dl.V1013Test
+java -Dfile.encoding=UTF-8 -cp "$OUT:$CP:$AJ" paradox.dl.EngineTest
 if command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; then bash "$ROOT/module/test/mp3.sh"; bash "$ROOT/module/test/containers.sh"; bash "$ROOT/module/test/muxer.sh"; else echo "mp3.sh skipped (no ffmpeg)"; fi

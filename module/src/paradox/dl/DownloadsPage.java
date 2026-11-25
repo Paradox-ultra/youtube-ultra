@@ -51,22 +51,41 @@ public class DownloadsPage extends FrameLayout implements Store.Listener {
       String st;
       switch (it.status){ case "downloading": st="Downloading · "+it.progress+"%\n"+Ui.size(it.done)+" / "+Ui.size(it.total)+" · "+String.format(Locale.US,"%.1f MB/s", it.speed/1048576); break;
         case "done": st=(it.channel==null||it.channel.isEmpty()? "": it.channel+" · ")+Ui.size(it.total); break;
-        case "failed": st= it.error!=null && (it.error.startsWith("MP3 ")||it.error.startsWith("MP4 "))? it.error+" · tap to retry": "Download failed · tap to retry"; break;
+        case "failed": st= reason(it)+" · tap to retry"; break;
         case "converting": st="Converting to MP3 · "+it.progress+"%"; break; case "merging": st= it.audio? "Saving MP3…": (it.progress>0 && it.progress<100? "Saving MP4 · "+it.progress+"%": "Saving MP4…"); break; case "resolving": st="Preparing…"; break;
         case "paused": case "cancelled": st="Paused · "+it.progress+"% · tap to resume"; break; default: st="Waiting…"; }
-      TextView s=Ui.text(c,st,13,it.status.equals("failed")? 0xFFFF8A80: SUB,false); s.setPadding(0,Ui.dp(c,4),0,0); col.addView(s);
+      TextView s=Ui.text(c,st,13,it.status.equals("failed")? (P.dark? 0xFFFF8A80: 0xFFC62828): SUB,false); s.setPadding(0,Ui.dp(c,4),0,0); s.setMaxLines(3); s.setEllipsize(android.text.TextUtils.TruncateAt.END); col.addView(s);   // the light-theme red was unreadable on white
       row.addView(col,new LinearLayout.LayoutParams(0,-2,1f));
       FrameLayout menu=new FrameLayout(c); android.graphics.drawable.GradientDrawable mm=new android.graphics.drawable.GradientDrawable(); mm.setShape(android.graphics.drawable.GradientDrawable.OVAL); mm.setColor(0xFFFFFFFF);
       menu.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(P.ripple), null, mm)); menu.setClickable(true); menu.setContentDescription("Action menu"); ImageView mic=new ImageView(c); mic.setImageDrawable(new Ui.Icon(Ui.I_MORE,TXT)); menu.addView(mic,new FrameLayout.LayoutParams(Ui.dp(c,20),Ui.dp(c,20),Gravity.CENTER));
       LinearLayout.LayoutParams mlp=new LinearLayout.LayoutParams(Ui.dp(c,40),Ui.dp(c,40)); mlp.gravity=Gravity.TOP; row.addView(menu,mlp);
       row.setOnClickListener(v -> { try { if (it.status.equals("done")) Open.play(c, it, false);
         else if (it.status.equals("failed")||it.status.equals("paused")||it.status.equals("cancelled")) DownloadService.start(c, it.id); } catch (Throwable t){ android.util.Log.e("ParadoxDL","open",t); } });
-      menu.setOnClickListener(v -> { PopupMenu pm=new PopupMenu(c, v); boolean done=it.status.equals("done");
-        if (done){ pm.getMenu().add(0,4,0,"Open with…"); pm.getMenu().add(0,3,0,"Share"); pm.getMenu().add(0,1,0,"Delete from downloads"); } else pm.getMenu().add(0,2,0,"Cancel download");
-        pm.setOnMenuItemClickListener(mi -> { try { if (mi.getItemId()==1){ try { if (it.path.startsWith("content:")) c.getContentResolver().delete(Uri.parse(it.path),null,null); else new File(it.path).delete(); } catch(Exception e){} Store.remove(c,it); }
-          else if (mi.getItemId()==2){ DownloadService.cancel(c,it.id); Store.remove(c,it); }
-          else if (mi.getItemId()==4) Open.play(c, it, true);
-          else Open.share(c, it); } catch (Throwable t){ android.util.Log.e("ParadoxDL","menu",t); }
+      menu.setOnClickListener(v -> { PopupMenu pm=new PopupMenu(c, v); boolean done=it.status.equals("done"); boolean stopped=stopped(it);
+        if (done){ pm.getMenu().add(0,4,0,"Open with…"); pm.getMenu().add(0,3,0,"Share"); pm.getMenu().add(0,1,0,"Delete from downloads"); }
+        else { if (stopped) pm.getMenu().add(0,6,0, it.status.equals("failed")? "Retry": "Resume"); else if (!it.status.equals("merging") && !it.status.equals("converting")) pm.getMenu().add(0,5,0,"Pause");   // saving/converting is short and can't resume midway
+          if (it.status.equals("failed") && it.error!=null && !it.error.isEmpty()) pm.getMenu().add(0,7,0,"Why it failed");
+          pm.getMenu().add(0,2,0,"Cancel download"); }
+        pm.setOnMenuItemClickListener(mi -> { try { switch (mi.getItemId()){
+            case 1: confirmDelete(c, it); return true;
+            case 2: DownloadService.cancel(c,it.id); Store.remove(c,it); dropThumb(it); break;
+            case 4: Open.play(c, it, true); break;
+            case 5: DownloadService.cancel(c,it.id); break;            // the engine stops, keeps its parts and the item shows "Paused · tap to resume"
+            case 6: DownloadService.start(c, it.id); break;
+            case 7: dialog(c).setTitle("Download failed").setMessage(it.error).setPositiveButton("Retry",(d,w) -> DownloadService.start(c,it.id)).setNegativeButton("Close",null).show(); return true;
+            default: Open.share(c, it); } } catch (Throwable t){ android.util.Log.e("ParadoxDL","menu",t); }
           render(); return true; }); pm.show(); });
       return row; }
+  static boolean stopped(Store.Item it){ return it.status.equals("paused")||it.status.equals("cancelled")||it.status.equals("failed"); }
+  /** First line of the saved error (was a bare "Download failed" for everything except MP3/MP4 errors). */
+  static String reason(Store.Item it){ String e= it.error==null? "": it.error.trim(); if (e.isEmpty()) return "Download failed"; int nl=e.indexOf('\n'); if (nl>0) e=e.substring(0,nl).trim(); if (e.length()>90) e=e.substring(0,87)+"…"; return e; }
+  android.app.AlertDialog.Builder dialog(Context c){ return new android.app.AlertDialog.Builder(c, P.dark? android.R.style.Theme_DeviceDefault_Dialog_Alert: android.R.style.Theme_DeviceDefault_Light_Dialog_Alert); }
+  void dropThumb(Store.Item it){ try { if (it.thumb!=null && !it.thumb.isEmpty()) { thumbs.remove(it.thumb); new File(it.thumb).delete(); } } catch (Throwable t){} }
+  /** Deleting a finished download removes the file from the phone, so ask first (it used to happen on one tap), and say so when Android kept the file. */
+  void confirmDelete(final Context c, final Store.Item it){
+    dialog(c).setTitle("Delete download?").setMessage("“"+it.title+"” will be deleted from your phone and from "+(it.audio? "Music": "your gallery")+".")
+      .setNegativeButton("Cancel", null).setPositiveButton("Delete", (d,w) -> { boolean gone=false;
+        try { if (it.path==null || it.path.isEmpty()) gone=true; else if (it.path.startsWith("content:")) gone= c.getContentResolver().delete(Uri.parse(it.path),null,null)>0 || !Open.exists(c, Uri.parse(it.path)); else { File f=new File(it.path); gone= f.delete() || !f.exists(); } } catch (Throwable e){ gone=false; }
+        Store.remove(c,it); dropThumb(it); render();
+        if (!gone) android.widget.Toast.makeText(c, "Removed from the list. Android didn't let YouTube Ultra delete the file itself (it was saved by an earlier install); delete it from your gallery.", android.widget.Toast.LENGTH_LONG).show(); }).show(); }
 }

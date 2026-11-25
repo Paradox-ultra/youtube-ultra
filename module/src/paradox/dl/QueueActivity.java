@@ -23,7 +23,10 @@ public class QueueActivity extends Activity implements Store.Listener {
   TextView tab(final String name){ TextView t=Ui.medium(this,"",15,P.sub); t.setGravity(Gravity.CENTER); t.setOnClickListener(v -> { cur=name; render(); }); return t; }
   @Override protected void onResume(){ super.onResume(); Store.listen(this); store().reload(); render(); }
   @Override protected void onPause(){ super.onPause(); Store.unlisten(this); }
-  @Override public void changed(){ h.post(this::render); }
+  boolean pending;
+  /** Downloads report progress ~1.4x a second; rebuilding the list (and restarting its thumbnail loads) on each one made the page flicker. Coalesced to one render per 600 ms. */
+  @Override public void changed(){ h.post(() -> { if (pending) return; pending=true; h.postDelayed(() -> { pending=false; if (!isFinishing()) render(); }, 600); }); }
+  static final java.util.Set<String> LOADING=java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
   void menu(View v){ PopupMenu pm=new PopupMenu(this,v); pm.getMenu().add(0,1,0,"Play all"); pm.getMenu().add(0,2,0,"Clear this list"); if (QueueStore.LATER.equals(cur)) pm.getMenu().add(0,3,0,"Download all"); pm.getMenu().add(0,4,0,"Open Downloads");
     pm.setOnMenuItemClickListener(it -> { switch (it.getItemId()) {
       case 1: QueueRun.play(this,cur,0); break;
@@ -56,6 +59,7 @@ public class QueueActivity extends Activity implements Store.Listener {
         render(); return true; }); pm.show(); });
     return r; }
   void thumb(final ImageView iv, final QueueStore.Entry e){ Bitmap b=THUMBS.get(e.id); if (b!=null) { iv.setImageBitmap(b); return; } iv.setTag(e.id);
+    if (!LOADING.add(e.id)) { h.postDelayed(() -> { Bitmap x=THUMBS.get(e.id); if (x!=null && e.id.equals(iv.getTag())) iv.setImageBitmap(x); }, 1200); return; }   // one fetch per video at a time
     new Thread(() -> { try { java.net.HttpURLConnection u=(java.net.HttpURLConnection)new java.net.URL(e.thumb).openConnection(); u.setConnectTimeout(8000); u.setReadTimeout(8000); if (u.getResponseCode()!=200) return;
-        final Bitmap bm=BitmapFactory.decodeStream(u.getInputStream()); if (bm==null) return; THUMBS.put(e.id,bm); h.post(() -> { if (e.id.equals(iv.getTag())) iv.setImageBitmap(bm); }); } catch (Throwable t){} }).start(); }
+        final Bitmap bm=BitmapFactory.decodeStream(u.getInputStream()); if (bm==null) return; THUMBS.put(e.id,bm); h.post(() -> { if (e.id.equals(iv.getTag()) && iv.isAttachedToWindow()) iv.setImageBitmap(bm); else changed(); }); } catch (Throwable t){} finally { LOADING.remove(e.id); } }).start(); }
 }
