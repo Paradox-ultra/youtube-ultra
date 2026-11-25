@@ -6,7 +6,8 @@ import java.security.MessageDigest;
 /** Anti-tamper: the official build is signed with one certificate. A copy re-signed with any other key shows a notice and closes.
  *  Fails open: if the signature can't be read, nothing happens. */
 public final class Guard {
-  public static final String CERT_SHA256="0a78f9ca9c1ee7de0eeb59d7eef68251b0dee694b55028dd3dedd644a833ad62";
+  /** Release signing certificate (SHA-256 of its DER). v10.21 moved to a new key (CN=YouTube Ultra, O=Paradox); v10.20 and older used 0a78f9ca…ad62. */
+  public static final String CERT_SHA256="9992fc2f6eb9c14905a4d7b6d55eb93b92946094c2eab4e11b4424b84368c3df";
   public static final String OFFICIAL="https://github.com/chinmays-tanx09/youtube-ultra/releases/latest";
   static final String TAG="ParadoxGuard";
   static volatile int state; // 0 unchecked, 1 genuine/unknown, 2 modified
